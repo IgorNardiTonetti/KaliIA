@@ -153,6 +153,7 @@ class AiKaliAssistantApp:
         self.auto_chain_count = 0
         self.auto_executed_commands: set[str] = set()
         self.auto_command_history: list[dict[str, str]] = []
+        self.current_user_objective = ""
         self.busy = False
         self.activity_base = ""
         self.activity_note = ""
@@ -882,6 +883,7 @@ class AiKaliAssistantApp:
         self.auto_chain_count = 0
         self.auto_executed_commands.clear()
         self.auto_command_history.clear()
+        self.current_user_objective = user_message
         self._set_ssh_output("")
         self._set_command("Preparando decisão operacional automática...")
         self.prompt_text.delete("1.0", tk.END)
@@ -936,6 +938,21 @@ class AiKaliAssistantApp:
             suggested_command = self.extract_command_suggestion(answer_text)
             if suggested_command:
                 self._handle_suggested_command(suggested_command)
+            elif self._needs_operational_repair(answer_text):
+                self.append_chat(
+                    "Sistema",
+                    "A IA respondeu com procedimento/texto em vez de uma decisão executável. Corrigindo automaticamente.",
+                    "system",
+                )
+                self.root.after(
+                    80,
+                    lambda: self._run_operational_repair(
+                        original_request=user_message,
+                        rejected_answer=answer_text,
+                        config=config,
+                        rules=rules,
+                    ),
+                )
             self.logger.info("Resposta recebida do Ollama.")
 
         self._run_worker(
@@ -1074,6 +1091,8 @@ class AiKaliAssistantApp:
             "Analise a saida como operador tecnico, separando evidencia real de hipotese. "
             "Tome uma decisao operacional objetiva, curta e focada no pedido original.\n"
             "Nao escreva planejamento aberto, lista de possibilidades ou etapas futuras. "
+            "Nao use markdown, blocos de codigo, secoes 'Procedimento', 'Resultados' inventados ou 'Proximo Passo'. "
+            "Respeite exclusoes do usuario; se ele pediu para esquecer XSS, nao volte para XSS. "
             "Decida: continuar com uma acao tecnica permitida ou concluir a analise com os achados.\n"
             "Nao invente vulnerabilidade quando a saida estiver vazia ou inconclusiva.\n"
             "Se stdout vier vazio, trate como 'sem evidencia neste teste', nao como achado.\n"
@@ -1134,6 +1153,21 @@ class AiKaliAssistantApp:
             suggested_command = self.extract_command_suggestion(answer_text)
             if suggested_command:
                 self._handle_suggested_command(suggested_command)
+            elif self._needs_operational_repair(answer_text):
+                self.append_chat(
+                    "Sistema",
+                    "A IA saiu do modo operacional. Corrigindo para uma ação objetiva ou conclusão baseada em evidência.",
+                    "system",
+                )
+                self.root.after(
+                    80,
+                    lambda: self._run_operational_repair(
+                        original_request=self.current_user_objective,
+                        rejected_answer=answer_text,
+                        config=config,
+                        rules=rules,
+                    ),
+                )
             else:
                 self.status_var.set("Análise concluída.")
             self.logger.info("Saída SSH analisada pela IA.")
@@ -1342,13 +1376,90 @@ class AiKaliAssistantApp:
             "MODO OPERACIONAL AUTOMATICO DO APP:\n"
             "O usuario quer que o app faca a coleta no Kali e mostre os retornos.\n"
             "Nao entregue checklist, nao liste 5 ou 10 acoes tecnicas, nao mande o usuario executar nada.\n"
+            "Nao use markdown, blocos ```bash```, secoes 'Procedimento', 'Resultados' ou 'Proximo Passo'.\n"
+            "Se esta chamada ainda nao trouxe Saida SSH, voce NAO tem resultado real; nao finja teste executado.\n"
+            "Respeite exclusoes do usuario. Se ele mandar esquecer XSS, nao sugira XSS.\n"
             "Tome uma decisao operacional concisa, focada no objetivo do usuario e baseada em evidencia.\n"
-            "Para alvo web, comece por coleta ampla e evidencial; evite grep isolado de palavras-chave no HTML.\n"
+            "Para alvo web, comece por coleta ampla e evidencial; para IDOR/API, priorize rotas, endpoints, JS, forms, chamadas HTTP e parametros observaveis.\n"
+            "Evite grep isolado de palavras-chave no HTML.\n"
             "Busque evidencia forte antes de chamar algo de vulnerabilidade. Sem evidencia forte, conclua como inconclusivo ou baixo sinal.\n"
-            "Se for necessario executar uma acao tecnica no Kali, use uma unica linha: ACAO_KALI: <linha_shell>\n"
+            "Se precisa coletar evidencia, responda com no maximo 2 linhas e uma delas deve ser: ACAO_KALI: <linha_shell>\n"
             "Evite brute force, wordlists, exploracao destrutiva, persistencia, malware, evasao ou exfiltracao.\n"
             "Depois da saida SSH, o app chamara voce de novo para analisar a evidencia e decidir a continuidade.\n\n"
             f"Pedido do usuario:\n{user_message}"
+        )
+
+    def _run_operational_repair(
+        self,
+        original_request: str,
+        rejected_answer: str,
+        config: dict[str, str],
+        rules: str,
+    ) -> None:
+        repair_prompt = self._build_repair_prompt(original_request, rejected_answer)
+        history_snapshot = self.history.copy()
+        self.stop_event.clear()
+        self.begin_stream_message("IA")
+
+        def worker() -> str:
+            def on_chunk(chunk: str) -> None:
+                self.root.after(
+                    0,
+                    lambda chunk=chunk: self.append_stream_chunk(chunk, "assistant"),
+                )
+
+            def on_status(note: str) -> None:
+                self.root.after(0, lambda note=note: self.set_activity_note(note))
+
+            return self.ollama_client.stream_chat(
+                model=config["ollama_model"],
+                rules=rules,
+                history=history_snapshot,
+                user_message=repair_prompt,
+                on_chunk=on_chunk,
+                on_status=on_status,
+                stop_event=self.stop_event,
+            )
+
+        def on_success(answer: object) -> None:
+            answer_text = str(answer)
+            if self.stop_event.is_set():
+                self.append_stream_chunk("\n\n[Geração interrompida pelo usuário.]", "system")
+            self.end_stream_message()
+            if answer_text:
+                self.history.append(
+                    {
+                        "role": "user",
+                        "content": self._limit_text(repair_prompt, 2500),
+                    }
+                )
+                self.history.append({"role": "assistant", "content": answer_text})
+                self.history = self.history[-20:]
+            suggested_command = self.extract_command_suggestion(answer_text)
+            if suggested_command:
+                self._handle_suggested_command(suggested_command)
+            else:
+                self.status_var.set("IA não retornou ação executável após correção.")
+
+        self._run_worker(
+            "Corrigindo resposta para decisão operacional...",
+            worker,
+            on_success,
+            cancellable=True,
+        )
+
+    def _build_repair_prompt(self, original_request: str, rejected_answer: str) -> str:
+        return (
+            "CORRECAO OPERACIONAL OBRIGATORIA:\n"
+            "Sua resposta anterior foi rejeitada pelo app porque trouxe procedimento, markdown, comando solto, resultado sem evidencia ou 'proximo passo'.\n"
+            "Nao repita essa estrutura. Nao use markdown. Nao use bloco de codigo. Nao diga que algo foi testado sem Saida SSH.\n"
+            "Foque estritamente no pedido original do usuario e respeite exclusoes explicitas.\n"
+            "Se precisa coletar evidencia, responda apenas com uma frase curta e uma linha ACAO_KALI: <linha_shell>.\n"
+            "Se ja houver evidencia suficiente no historico, conclua em ate 4 linhas citando somente fatos observados.\n"
+            "Para IDOR/API, prefira coleta de endpoints/JS/forms/requisicoes e parametros observaveis; nao sugira XSS se o usuario pediu para esquecer XSS.\n\n"
+            f"Pedido original:\n{original_request or '(usar objetivo do historico)'}\n\n"
+            "Resposta anterior rejeitada:\n"
+            f"{self._limit_text(rejected_answer, 3500)}"
         )
 
     def _build_initial_web_recon_command(self, user_message: str) -> str:
@@ -1895,6 +2006,58 @@ class AiKaliAssistantApp:
                 return cleaned
 
         return ""
+
+    @classmethod
+    def _needs_operational_repair(cls, answer: str) -> bool:
+        if not answer.strip():
+            return False
+        if cls.extract_command_suggestion(answer):
+            return False
+
+        lowered = answer.lower()
+        bad_structure_terms = [
+            "próximo passo",
+            "proximo passo",
+            "procedimento operacional",
+            "coleta inicial",
+            "análise manual",
+            "analise manual",
+            "execute ",
+            "executar ",
+            "abra ",
+            "abrir arquivo",
+            "```",
+        ]
+        if any(term in lowered for term in bad_structure_terms):
+            return True
+        return cls._contains_unmarked_shell_action(answer)
+
+    @classmethod
+    def _contains_unmarked_shell_action(cls, answer: str) -> bool:
+        code_block_pattern = re.compile(
+            r"```(?:bash|sh|shell|console)?\s*\n(.*?)```",
+            re.IGNORECASE | re.DOTALL,
+        )
+        for match in code_block_pattern.finditer(answer):
+            for raw_line in match.group(1).splitlines():
+                cleaned = cls._clean_unmarked_shell_line(raw_line)
+                if cleaned and cls._looks_like_shell_command(cleaned):
+                    return True
+
+        for raw_line in answer.splitlines():
+            cleaned = cls._clean_unmarked_shell_line(raw_line)
+            if cleaned and cls._looks_like_shell_command(cleaned):
+                return True
+        return False
+
+    @staticmethod
+    def _clean_unmarked_shell_line(line: str) -> str:
+        cleaned = line.strip().strip("`")
+        cleaned = re.sub(r"^\s*(?:[-*]\s*)?\d+[.)]\s*", "", cleaned)
+        cleaned = re.sub(r"^\s*[-*]\s+", "", cleaned)
+        if cleaned.startswith("$ "):
+            cleaned = cleaned[2:].strip()
+        return cleaned
 
     @classmethod
     def _looks_like_shell_command(cls, text: str) -> bool:

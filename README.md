@@ -24,6 +24,7 @@ Bot local em Python com interface Tkinter para conversar com o Ollama, usar o mo
 - Teste de conexão SSH com Kali usando Paramiko.
 - Painel de decisão operacional preparado pela IA.
 - Execução automática no Kali para ações leves permitidas.
+- Correção automática quando a IA responde com procedimento, markdown ou ação solta sem `ACAO_KALI`.
 - Runner inicial de avaliação web para URLs, cobrindo headers, CORS, cookies, HTML, scripts, endpoints em JS, sourcemaps e paths comuns antes de entregar evidências à IA.
 - Saída SSH em tempo real enquanto a ação roda.
 - Análise automática da saída SSH pela IA depois que uma ação termina.
