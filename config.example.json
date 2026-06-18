@@ -1,0 +1,6 @@
+{
+  "kali_ip": "192.168.0.10",
+  "ssh_user": "kali",
+  "ssh_password": "",
+  "ollama_model": "deephat-v1-ptbr:latest"
+}
