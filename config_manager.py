@@ -10,7 +10,7 @@ DEFAULT_CONFIG: dict[str, str] = {
     "kali_ip": "",
     "ssh_user": "kali",
     "ssh_password": "",
-    "ollama_model": "deephat-v1-ptbr:latest",
+    "ollama_model": "qwen3:14b",
 }
 
 

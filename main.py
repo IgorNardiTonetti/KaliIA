@@ -67,6 +67,14 @@ class AiKaliAssistantApp:
         "openssl",
         "python",
         "python3",
+        "id",
+        "uname",
+        "whoami",
+        "find",
+        "sed",
+        "awk",
+        "env",
+        "printenv",
         "ss",
         "sudo",
         "tail",
@@ -946,7 +954,7 @@ class AiKaliAssistantApp:
                         "system",
                     )
                 self._handle_suggested_command(suggested_command)
-            elif self._needs_operational_repair(answer_text):
+            elif self._needs_operational_repair(answer_text, has_evidence=False):
                 self.append_chat(
                     "Sistema",
                     "A IA respondeu com procedimento/texto em vez de uma decisão executável. Corrigindo automaticamente.",
@@ -1167,7 +1175,10 @@ class AiKaliAssistantApp:
                         "system",
                     )
                 self._handle_suggested_command(suggested_command)
-            elif self._needs_operational_repair(answer_text):
+            elif self._needs_operational_repair(
+                answer_text,
+                has_evidence=bool(self.auto_command_history),
+            ):
                 self.append_chat(
                     "Sistema",
                     "A IA saiu do modo operacional. Corrigindo para uma ação objetiva ou conclusão baseada em evidência.",
@@ -2019,7 +2030,7 @@ class AiKaliAssistantApp:
     @classmethod
     def extract_command_suggestion(cls, answer: str) -> str:
         explicit_pattern = re.compile(
-            r"^\s*(?:[-*]\s*)?`?(?:ACAO_KALI|AÇÃO_KALI|ACAO\s*\d*|AÇÃO\s*\d*|COMANDO_KALI|COMANDO|COMMAND)\s*:",
+            r"^\s*(?:[-*]\s*)?`?(?:ACAO[_\s-]*KALI|AÇÃO[_\s-]*KALI|ACAO\s*\d+|AÇÃO\s*\d+|ACAO|AÇÃO|COMANDO[_\s-]*KALI|COMANDO|COMMAND)\s*(?::|=>|-)\s*",
             re.IGNORECASE,
         )
         for line in answer.splitlines():
@@ -2032,13 +2043,24 @@ class AiKaliAssistantApp:
         return ""
 
     @classmethod
-    def _needs_operational_repair(cls, answer: str) -> bool:
+    def _needs_operational_repair(cls, answer: str, has_evidence: bool = False) -> bool:
         if not answer.strip():
             return False
         if cls.extract_command_suggestion(answer):
             return False
 
         lowered = answer.lower()
+        if has_evidence and any(
+            term in lowered
+            for term in [
+                "finding|",
+                "## achados",
+                "## recomenda",
+                "## conclusão",
+                "## conclusao",
+            ]
+        ):
+            return False
         bad_structure_terms = [
             "próximo passo",
             "proximo passo",
@@ -2119,7 +2141,7 @@ class AiKaliAssistantApp:
         cleaned = line.strip().strip("`")
         cleaned = re.sub(r"^\s*[-*]\s+", "", cleaned)
         cleaned = re.sub(
-            r"^(?:ACAO_KALI|AÇÃO_KALI|ACAO\s*\d*|AÇÃO\s*\d*|COMANDO_KALI|COMANDO|COMMAND)\s*:\s*",
+            r"^(?:ACAO[_\s-]*KALI|AÇÃO[_\s-]*KALI|ACAO\s*\d+|AÇÃO\s*\d+|ACAO|AÇÃO|COMANDO[_\s-]*KALI|COMANDO|COMMAND)\s*(?::|=>|-)\s*",
             "",
             cleaned,
             flags=re.IGNORECASE,

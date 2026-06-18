@@ -1,6 +1,6 @@
 # AI Kali Assistant
 
-Bot local em Python com interface Tkinter para conversar com o Ollama, usar o modelo personalizado `deephat-v1-ptbr:latest` baseado no DeepHat V1 15 GB e executar ações autorizadas em uma VM Kali Linux via SSH.
+Bot local em Python com interface Tkinter para conversar com o Ollama, usar o modelo `qwen3:14b` por padrão e executar ações autorizadas em uma VM Kali Linux via SSH.
 
 ## Recursos
 
@@ -11,12 +11,12 @@ Bot local em Python com interface Tkinter para conversar com o Ollama, usar o mo
 - Chat com IA via `http://localhost:11434/api/chat`.
 - Resposta em streaming no chat, sem esperar a geração inteira terminar.
 - Botão **Parar** para interromper geração do Ollama.
-- Modelo padrão `deephat-v1-ptbr:latest`, criado sobre `DeepHat/DeepHat-V1-7B:latest` (~15 GB, 32K de contexto).
+- Modelo padrão `qwen3:14b`, escolhido por seguir melhor formatos operacionais rígidos.
 - Contexto limitado e saída maior para manter o desktop mais responsivo.
 - Aviso explícito quando a resposta atinge o limite de tamanho.
 - Status com tempo decorrido e etapa atual enquanto Ollama ou SSH trabalham.
 - Inicialização automática do `ollama serve` quando a API local não estiver ativa.
-- Modelo padrão `deephat-v1-ptbr:latest`.
+- Modelo padrão `qwen3:14b`.
 - Edição das regras do sistema pelo botão **Definir Regras**.
 - Regras salvas em `rules.txt` e enviadas literalmente como a única mensagem de sistema para o modelo.
 - Configurações salvas em `config.json`.
@@ -25,7 +25,7 @@ Bot local em Python com interface Tkinter para conversar com o Ollama, usar o mo
 - Painel de decisão operacional preparado pela IA.
 - Execução automática no Kali para ações leves permitidas.
 - Correção automática quando a IA responde com procedimento, markdown ou ação solta sem `ACAO_KALI`.
-- Aceita variações operacionais como `ACAO1:`/`AÇÃO 1:` e ignora achados declarados antes de saída real do terminal.
+- Aceita variações operacionais como `ACAOKALI:`, `ACAO KALI:`, `ACAO1:`/`AÇÃO 1:` e ignora achados declarados antes de saída real do terminal.
 - Runner inicial de avaliação web para URLs, cobrindo headers, CORS, cookies, HTML, scripts, endpoints em JS, sourcemaps e paths comuns antes de entregar evidências à IA.
 - Saída SSH em tempo real enquanto a ação roda.
 - Análise automática da saída SSH pela IA depois que uma ação termina.
@@ -38,8 +38,7 @@ Bot local em Python com interface Tkinter para conversar com o Ollama, usar o mo
 
 - Python 3.10 ou superior.
 - Ollama instalado e rodando localmente.
-- Modelo `DeepHat/DeepHat-V1-7B:latest` baixado no Ollama.
-- Modelo personalizado `deephat-v1-ptbr:latest` criado no Ollama.
+- Modelo `qwen3:14b` baixado no Ollama.
 - VM Kali Linux com SSH ativo e acessível pela máquina host.
 
 ## Instalação
@@ -56,16 +55,10 @@ Instale as dependências:
 pip install -r requirements.txt
 ```
 
-Baixe o modelo no Ollama, se ainda não tiver:
+Baixe o modelo padrão no Ollama, se ainda não tiver:
 
 ```bash
-ollama pull DeepHat/DeepHat-V1-7B
-```
-
-Crie o modelo personalizado em PT-BR:
-
-```bash
-ollama create deephat-v1-ptbr -f Modelfile.deephat-v1-ptbr
+ollama pull qwen3:14b
 ```
 
 O app tenta iniciar o Ollama automaticamente quando necessário. Se preferir iniciar manualmente:
@@ -96,11 +89,13 @@ python main.py
 10. Cada retorno aparece no terminal Kali inferior e é enviado automaticamente para a IA analisar a continuidade.
 11. Use **Relatório** para gerar um Markdown em `reports/`.
 
-O modelo `deephat-v1-ptbr:latest` usa o DeepHat V1 15 GB como base e pode demorar no primeiro carregamento. Depois que carrega, o app mantém o modelo ativo por aproximadamente 30 minutos. Enquanto ele gera, a barra de progresso e o status mostram a etapa atual, e o botão **Parar** permite interromper a geração. Se a resposta bater no limite de tamanho, o chat mostra um aviso e você pode enviar `continue`.
+O modelo `qwen3:14b` pode demorar no primeiro carregamento. Depois que carrega, o app mantém o modelo ativo por aproximadamente 30 minutos. Enquanto ele gera, a barra de progresso e o status mostram a etapa atual, e o botão **Parar** permite interromper a geração. Se a resposta bater no limite de tamanho, o chat mostra um aviso e você pode enviar `continue`.
 
 O arquivo `Modelfile.whiterabbitneo-ptbr` fica no projeto como alternativa local baseada no WhiteRabbitNeo V3 15 GB.
 
-O arquivo `Modelfile.deephat` fica no projeto como alternativa local baseada em `qwen3:14b`, mas não é o modelo padrão atual.
+O arquivo `Modelfile.deephat-v1-ptbr` fica no projeto como alternativa local baseada no DeepHat V1 15 GB.
+
+O arquivo `Modelfile.deephat` fica no projeto como alternativa local baseada em `qwen3:14b`.
 
 ## Segurança e escopo
 
