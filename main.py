@@ -154,6 +154,7 @@ class AiKaliAssistantApp:
         self.auto_executed_commands: set[str] = set()
         self.auto_command_history: list[dict[str, str]] = []
         self.current_user_objective = ""
+        self.operational_repair_count = 0
         self.busy = False
         self.activity_base = ""
         self.activity_note = ""
@@ -884,6 +885,7 @@ class AiKaliAssistantApp:
         self.auto_executed_commands.clear()
         self.auto_command_history.clear()
         self.current_user_objective = user_message
+        self.operational_repair_count = 0
         self._set_ssh_output("")
         self._set_command("Preparando decisão operacional automática...")
         self.prompt_text.delete("1.0", tk.END)
@@ -937,6 +939,12 @@ class AiKaliAssistantApp:
                 self.history = self.history[-20:]
             suggested_command = self.extract_command_suggestion(answer_text)
             if suggested_command:
+                if self._contains_pre_execution_claims(answer_text):
+                    self.append_chat(
+                        "Sistema",
+                        "Achados declarados antes da execução foram ignorados. O terminal Kali será a fonte de evidência.",
+                        "system",
+                    )
                 self._handle_suggested_command(suggested_command)
             elif self._needs_operational_repair(answer_text):
                 self.append_chat(
@@ -1152,6 +1160,12 @@ class AiKaliAssistantApp:
                 self.history = self.history[-20:]
             suggested_command = self.extract_command_suggestion(answer_text)
             if suggested_command:
+                if not self.auto_command_history and self._contains_pre_execution_claims(answer_text):
+                    self.append_chat(
+                        "Sistema",
+                        "Achados declarados antes da execução foram ignorados. O terminal Kali será a fonte de evidência.",
+                        "system",
+                    )
                 self._handle_suggested_command(suggested_command)
             elif self._needs_operational_repair(answer_text):
                 self.append_chat(
@@ -1396,8 +1410,18 @@ class AiKaliAssistantApp:
         config: dict[str, str],
         rules: str,
     ) -> None:
+        if self.operational_repair_count >= 1:
+            self.status_var.set("Correção operacional interrompida para evitar repetição.")
+            self.append_chat(
+                "Sistema",
+                "A IA repetiu uma resposta fora do formato operacional. Interrompi a correção automática para evitar loop.",
+                "error",
+            )
+            return
+
+        self.operational_repair_count += 1
         repair_prompt = self._build_repair_prompt(original_request, rejected_answer)
-        history_snapshot = self.history.copy()
+        history_snapshot: list[dict[str, str]] = []
         self.stop_event.clear()
         self.begin_stream_message("IA")
 
@@ -1995,7 +2019,7 @@ class AiKaliAssistantApp:
     @classmethod
     def extract_command_suggestion(cls, answer: str) -> str:
         explicit_pattern = re.compile(
-            r"^\s*(?:[-*]\s*)?`?(?:ACAO_KALI|AÇÃO_KALI|COMANDO_KALI|COMANDO|COMMAND)\s*:",
+            r"^\s*(?:[-*]\s*)?`?(?:ACAO_KALI|AÇÃO_KALI|ACAO\s*\d*|AÇÃO\s*\d*|COMANDO_KALI|COMANDO|COMMAND)\s*:",
             re.IGNORECASE,
         )
         for line in answer.splitlines():
@@ -2027,10 +2051,30 @@ class AiKaliAssistantApp:
             "abra ",
             "abrir arquivo",
             "```",
+            "finding|",
+            "## achados",
+            "## recomenda",
+            "## conclusão",
+            "## conclusao",
         ]
         if any(term in lowered for term in bad_structure_terms):
             return True
         return cls._contains_unmarked_shell_action(answer)
+
+    @staticmethod
+    def _contains_pre_execution_claims(answer: str) -> bool:
+        lowered = answer.lower()
+        claim_terms = [
+            "finding|",
+            "## achados",
+            "## recomenda",
+            "## conclusão",
+            "## conclusao",
+            "vulnerabilidade",
+            "exposto",
+            "exposta",
+        ]
+        return any(term in lowered for term in claim_terms)
 
     @classmethod
     def _contains_unmarked_shell_action(cls, answer: str) -> bool:
@@ -2075,7 +2119,7 @@ class AiKaliAssistantApp:
         cleaned = line.strip().strip("`")
         cleaned = re.sub(r"^\s*[-*]\s+", "", cleaned)
         cleaned = re.sub(
-            r"^(?:ACAO_KALI|AÇÃO_KALI|COMANDO_KALI|COMANDO|COMMAND)\s*:\s*",
+            r"^(?:ACAO_KALI|AÇÃO_KALI|ACAO\s*\d*|AÇÃO\s*\d*|COMANDO_KALI|COMANDO|COMMAND)\s*:\s*",
             "",
             cleaned,
             flags=re.IGNORECASE,

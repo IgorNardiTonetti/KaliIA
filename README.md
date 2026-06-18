@@ -25,6 +25,7 @@ Bot local em Python com interface Tkinter para conversar com o Ollama, usar o mo
 - Painel de decisão operacional preparado pela IA.
 - Execução automática no Kali para ações leves permitidas.
 - Correção automática quando a IA responde com procedimento, markdown ou ação solta sem `ACAO_KALI`.
+- Aceita variações operacionais como `ACAO1:`/`AÇÃO 1:` e ignora achados declarados antes de saída real do terminal.
 - Runner inicial de avaliação web para URLs, cobrindo headers, CORS, cookies, HTML, scripts, endpoints em JS, sourcemaps e paths comuns antes de entregar evidências à IA.
 - Saída SSH em tempo real enquanto a ação roda.
 - Análise automática da saída SSH pela IA depois que uma ação termina.
