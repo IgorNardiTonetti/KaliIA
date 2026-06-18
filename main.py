@@ -993,7 +993,7 @@ class AiKaliAssistantApp:
         self.append_ssh_output(
             "\n"
             + "=" * 72
-            + f"\n[ação #{self.auto_chain_count or 1}]\n$ {display_command}\n\n[conectando ao Kali...]\n"
+            + f"\n[enviando ao Kali]\n{self._format_terminal_action(command)}\n\n[conectando ao Kali...]\n"
         )
 
         def worker() -> SSHCommandResult:
@@ -1657,6 +1657,10 @@ class AiKaliAssistantApp:
         if self._is_low_value_grep_cycle(command):
             command_key = re.sub(r"\s+", " ", command).strip().lower()
             self.auto_executed_commands.add(command_key)
+            self._append_ai_decision_to_terminal(
+                command,
+                "ignorada por baixo valor: repetição de curl|grep sem evidência",
+            )
             self.append_chat(
                 "Sistema",
                 "Ação ignorada por baixo valor: a automação já executou buscas curl|grep "
@@ -1681,6 +1685,10 @@ class AiKaliAssistantApp:
 
         blocked_reason = self._blocked_command_reason(command)
         if blocked_reason:
+            self._append_ai_decision_to_terminal(
+                command,
+                f"bloqueada pela automação: {blocked_reason}",
+            )
             self.append_chat(
                 "Sistema",
                 f"Ação bloqueada pela automação: {blocked_reason}.\n{command}",
@@ -1691,6 +1699,10 @@ class AiKaliAssistantApp:
 
         intensive_reasons = self._intensive_command_reasons(command)
         if intensive_reasons:
+            self._append_ai_decision_to_terminal(
+                command,
+                "bloqueada por intensidade: " + "; ".join(intensive_reasons),
+            )
             self.append_chat(
                 "Sistema",
                 "Ação intensa não executada automaticamente:\n"
@@ -1703,6 +1715,10 @@ class AiKaliAssistantApp:
 
         command_key = re.sub(r"\s+", " ", command).strip().lower()
         if command_key in self.auto_executed_commands:
+            self._append_ai_decision_to_terminal(
+                command,
+                "bloqueada por repetição",
+            )
             self.append_chat(
                 "Sistema",
                 "A IA tentou repetir uma ação que já foi executada nesta automação. "
@@ -1714,8 +1730,34 @@ class AiKaliAssistantApp:
 
         self.auto_executed_commands.add(command_key)
         self.auto_chain_count += 1
+        self._append_ai_decision_to_terminal(command, "aprovada para execução automática")
         self.status_var.set(f"Executando ação automática #{self.auto_chain_count}: {command}")
         self.root.after(250, lambda: self.execute_on_kali(auto_confirm=True))
+
+    def _append_ai_decision_to_terminal(self, command: str, status: str) -> None:
+        action_number = self.auto_chain_count or 1
+        self.append_ssh_output(
+            "\n"
+            + "=" * 72
+            + f"\n[IA decidiu executar #{action_number}]\n"
+            + f"status: {status}\n"
+            + self._format_terminal_marker(command)
+            + "\n"
+        )
+
+    @staticmethod
+    def _format_terminal_action(command: str) -> str:
+        command = command.strip()
+        if "\n" in command:
+            return command
+        return f"$ {command}"
+
+    @staticmethod
+    def _format_terminal_marker(command: str) -> str:
+        command = command.strip()
+        if "\n" in command:
+            return "ACAO_KALI:\n" + command
+        return "ACAO_KALI: " + command
 
     def _read_config_from_ui(self) -> dict[str, str]:
         model = self.ollama_model_var.get().strip() or DEFAULT_CONFIG["ollama_model"]
