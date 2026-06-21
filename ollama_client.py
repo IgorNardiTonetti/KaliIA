@@ -16,7 +16,9 @@ class OllamaClient:
         "temperature": 0.1,
         "top_p": 0.9,
         "num_ctx": 8192,
-        "num_predict": 6144,
+        "num_predict": 4096,
+        "repeat_last_n": 1024,
+        "repeat_penalty": 1.15,
     }
 
     def __init__(

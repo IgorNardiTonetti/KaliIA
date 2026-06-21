@@ -895,30 +895,46 @@ class AiKaliAssistantApp:
             self.logger.error(str(exc))
             return
 
-        self.auto_chain_count = 0
-        self.auto_executed_commands.clear()
-        self.auto_command_history.clear()
-        self.current_user_objective = user_message
-        self.operational_repair_count = 0
-        self._set_ssh_output("")
-        self._set_command("Preparando decisão operacional automática...")
         self.prompt_text.delete("1.0", tk.END)
         self.append_chat("Você", user_message, "user")
 
-        initial_command = self._build_initial_web_recon_command(user_message)
-        if initial_command:
+        blocked_request = self._blocked_user_request_reason(user_message)
+        if blocked_request:
+            self._set_command("Sem acao operacional: pedido bloqueado por seguranca.")
+            self.append_chat("IA", blocked_request, "assistant")
             self.history.append({"role": "user", "content": user_message})
+            self.history.append({"role": "assistant", "content": blocked_request})
             self.history = self.history[-20:]
-            self.append_chat(
-                "IA",
-                "Iniciando avaliação web estruturada no Kali. Vou tomar decisões com base nas evidências coletadas.",
-                "assistant",
-            )
-            self._handle_suggested_command(initial_command)
+            self.status_var.set("Pedido bloqueado por seguranca.")
             return
 
+        operational_mode = self._should_use_operational_mode(user_message)
+        self.operational_repair_count = 0
+        if operational_mode:
+            self.auto_chain_count = 0
+            self.auto_executed_commands.clear()
+            self.auto_command_history.clear()
+            self.current_user_objective = user_message
+            self._set_ssh_output("")
+            self._set_command("Preparando decisao operacional automatica...")
+
+            initial_command = self._build_initial_web_recon_command(user_message)
+            if initial_command:
+                self.history.append({"role": "user", "content": user_message})
+                self.history = self.history[-20:]
+                self.append_chat(
+                    "IA",
+                    "Iniciando avaliacao web estruturada no Kali. Vou tomar decisoes com base nas evidencias coletadas.",
+                    "assistant",
+                )
+                self._handle_suggested_command(initial_command)
+                return
+            model_message = self._build_operational_user_message(user_message)
+        else:
+            self._set_command("Aguardando decisao operacional.")
+            model_message = self._build_conversation_user_message(user_message)
+
         history_snapshot = self.history.copy()
-        model_message = self._build_operational_user_message(user_message)
         self.begin_stream_message("IA")
         self.logger.info("Mensagem enviada ao Ollama.")
 
@@ -951,30 +967,33 @@ class AiKaliAssistantApp:
                 self.history.append({"role": "user", "content": user_message})
                 self.history.append({"role": "assistant", "content": answer_text})
                 self.history = self.history[-20:]
-            suggested_command = self.extract_command_suggestion(answer_text)
-            if suggested_command:
-                if self._contains_pre_execution_claims(answer_text):
+            if operational_mode:
+                suggested_command = self.extract_command_suggestion(answer_text)
+                if suggested_command:
+                    if self._contains_pre_execution_claims(answer_text):
+                        self.append_chat(
+                            "Sistema",
+                            "Achados declarados antes da execução foram ignorados. O terminal Kali será a fonte de evidência.",
+                            "system",
+                        )
+                    self._handle_suggested_command(suggested_command)
+                elif self._needs_operational_repair(answer_text, has_evidence=False):
                     self.append_chat(
                         "Sistema",
-                        "Achados declarados antes da execução foram ignorados. O terminal Kali será a fonte de evidência.",
+                        "A IA respondeu com procedimento/texto em vez de uma decisão executável. Corrigindo automaticamente.",
                         "system",
                     )
-                self._handle_suggested_command(suggested_command)
-            elif self._needs_operational_repair(answer_text, has_evidence=False):
-                self.append_chat(
-                    "Sistema",
-                    "A IA respondeu com procedimento/texto em vez de uma decisão executável. Corrigindo automaticamente.",
-                    "system",
-                )
-                self.root.after(
-                    80,
-                    lambda: self._run_operational_repair(
-                        original_request=user_message,
-                        rejected_answer=answer_text,
-                        config=config,
-                        rules=rules,
-                    ),
-                )
+                    self.root.after(
+                        80,
+                        lambda: self._run_operational_repair(
+                            original_request=user_message,
+                            rejected_answer=answer_text,
+                            config=config,
+                            rules=rules,
+                        ),
+                    )
+            else:
+                self.status_var.set("Pronto.")
             self.logger.info("Resposta recebida do Ollama.")
 
         self._run_worker(
@@ -1104,8 +1123,11 @@ class AiKaliAssistantApp:
             self.logger.error(str(exc))
             return
 
-        output_for_model = self._limit_text(ssh_output, ANALYSIS_OUTPUT_LIMIT)
-        history_snapshot = self.history.copy()
+        if self._is_structured_assessment_command(command):
+            output_for_model = self._build_structured_assessment_summary(ssh_output)
+        else:
+            output_for_model = self._limit_text(ssh_output, ANALYSIS_OUTPUT_LIMIT)
+        history_snapshot: list[dict[str, str]] = []
         history_context = self._build_command_history_context()
         extra_block = f"\nInstrucao adicional:\n{extra_instruction}\n" if extra_instruction else ""
         analysis_prompt = (
@@ -1125,6 +1147,7 @@ class AiKaliAssistantApp:
             "Se uma nova acao tecnica for necessaria para cumprir o objetivo, decida a acao e inclua uma unica linha no formato "
             "ACAO_KALI: <linha_shell>. Trate a linha como uma decisao tecnica objetiva, nao como rascunho.\n\n"
             f"{extra_block}"
+            f"Pedido original do usuario:\n{self.current_user_objective or '(nao informado)'}\n\n"
             f"Historico resumido desta automacao:\n{history_context}\n\n"
             f"Acao executada:\n{self._display_command(command)}\n\n"
             f"Saida SSH:\n{output_for_model}"
@@ -1401,6 +1424,104 @@ class AiKaliAssistantApp:
             except tk.TclError:
                 pass
             self.activity_after_id = None
+
+    @classmethod
+    def _blocked_user_request_reason(cls, user_message: str) -> str:
+        lowered = user_message.lower()
+        credential_attack_terms = [
+            "bruteforce",
+            "brute force",
+            "forca bruta",
+            "força bruta",
+            "hydra",
+            "medusa",
+            "ncrack",
+            "wordlist",
+            "password list",
+            "lista de senha",
+            "quebrar senha",
+            "descobrir senha",
+        ]
+        credential_targets = [
+            "webmail",
+            "email",
+            "e-mail",
+            "senha",
+            "login",
+            "usuario",
+            "usuário",
+            "@",
+        ]
+        if any(term in lowered for term in credential_attack_terms) and any(
+            target in lowered for target in credential_targets
+        ):
+            return (
+                "Nao vou executar nem orientar brute force, tentativa de senha ou ataque de credenciais. "
+                "Posso ajudar com avaliacao defensiva autorizada do fluxo de login: headers, TLS, cookies, "
+                "politica de bloqueio, MFA, rate limit e recomendacoes de hardening sem testar senhas."
+            )
+        return ""
+
+    @classmethod
+    def _should_use_operational_mode(cls, user_message: str) -> bool:
+        lowered = user_message.lower()
+        has_target = bool(cls._extract_first_url(user_message)) or bool(
+            re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", user_message)
+        )
+        action_terms = [
+            "analise",
+            "analisar",
+            "avaliar",
+            "auditar",
+            "testar",
+            "teste",
+            "verificar",
+            "verifique",
+            "executar",
+            "execute",
+            "rodar",
+            "rode",
+            "scan",
+            "enumera",
+            "recon",
+            "sqlmap",
+            "nmap",
+            "whatweb",
+            "curl",
+            "faca vc",
+            "faça vc",
+            "fazer sozinho",
+        ]
+        if has_target and any(term in lowered for term in action_terms):
+            return True
+        if cls._looks_like_shell_command(user_message):
+            return True
+        return False
+
+    def _build_conversation_user_message(self, user_message: str) -> str:
+        evidence_context = ""
+        if self.last_ssh_output.strip():
+            if self._is_structured_assessment_command(self.last_command):
+                evidence = self._build_structured_assessment_summary(self.last_ssh_output)
+            else:
+                evidence = self._limit_text(self.last_ssh_output, 7000)
+            evidence_context = (
+                "\n\nContexto do ultimo terminal Kali. Use apenas como evidencia, "
+                "nao invente achados fora dele:\n"
+                f"Acao: {self._display_command(self.last_command)}\n"
+                f"{evidence}"
+            )
+
+        return (
+            "MODO CONVERSA TECNICA:\n"
+            "Responda em portugues do Brasil, de forma direta e natural.\n"
+            "Nao force ACAO_KALI, nao execute nada e nao mande o usuario executar comando.\n"
+            "Se a pergunta pedir explicacao de resultado, use somente evidencia observada no terminal.\n"
+            "Se faltar evidencia, diga claramente o que falta e qual seria uma coleta defensiva permitida.\n"
+            "Nao repita paragrafo, nao invente .env/swagger/robots expostos sem linha de evidencia.\n\n"
+            f"Mensagem do usuario:\n{user_message}"
+            f"{evidence_context}"
+        )
 
     def _build_operational_user_message(self, user_message: str) -> str:
         return (
@@ -2024,6 +2145,64 @@ class AiKaliAssistantApp:
                 stderr or "(vazio)",
             ]
         )
+
+    @classmethod
+    def _build_structured_assessment_summary(cls, ssh_output: str) -> str:
+        raw_lines = [line.strip() for line in ssh_output.splitlines() if line.strip()]
+        path_status: dict[str, str] = {}
+        summary_lines = [
+            "Resumo estruturado do scanner do app.",
+            "Regra de evidencia: somente FINDING e PATH_PROBE com status=200 indicam exposicao real.",
+            "PATH_PROBE com 401/403/404/5xx significa testado, mas nao exposto.",
+            "",
+        ]
+
+        findings: list[str] = []
+        targets: list[str] = []
+        http_checks: list[str] = []
+        path_probes: list[str] = []
+        path_previews: list[str] = []
+        js_lines: list[str] = []
+
+        for line in raw_lines:
+            parts = line.split("|")
+            kind = parts[0] if parts else ""
+            if kind == "PATH_PROBE" and len(parts) >= 3:
+                path = parts[1]
+                status = next((part for part in parts[2:] if part.startswith("status=")), "")
+                path_status[path] = status.removeprefix("status=")
+
+        for line in raw_lines:
+            parts = line.split("|")
+            kind = parts[0] if parts else ""
+            if kind in {"START", "TARGET", "END"}:
+                targets.append(line)
+            elif kind in {"HTTP", "CHECK"}:
+                http_checks.append(line)
+            elif kind == "FINDING":
+                findings.append(line)
+            elif kind == "PATH_PROBE":
+                path_probes.append(line)
+            elif kind == "PATH_BODY_PREVIEW" and len(parts) >= 2:
+                if path_status.get(parts[1]) == "200":
+                    path_previews.append(line)
+            elif kind in {"JS", "JS_ENDPOINT", "SOURCEMAP_PROBE", "ASSET_FETCH"}:
+                js_lines.append(line)
+
+        sections = [
+            ("Alvo e execucao", targets[:12]),
+            ("HTTP e checks", http_checks[:40]),
+            ("Achados emitidos pelo scanner", findings[:40] or ["(nenhum FINDING emitido)"]),
+            ("Probes de caminhos", path_probes[:40]),
+            ("Previews somente de caminhos 200", path_previews[:20]),
+            ("JS e assets", js_lines[:50]),
+        ]
+        for title, lines in sections:
+            summary_lines.append(f"[{title}]")
+            summary_lines.extend(lines or ["(sem linhas relevantes)"])
+            summary_lines.append("")
+
+        return cls._limit_text("\n".join(summary_lines), ANALYSIS_OUTPUT_LIMIT)
 
     @staticmethod
     def _limit_text(text: str, limit: int) -> str:
