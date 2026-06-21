@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Callable
+from urllib.parse import urlparse
 import tkinter as tk
 
 from config_manager import ConfigManager, DEFAULT_CONFIG
@@ -52,6 +53,11 @@ class AiKaliAssistantApp:
         "whatweb",
         "whois",
         "wpscan",
+    }
+
+    REFERENCE_URL_DOMAINS = {
+        "sqlmap.org",
+        "www.sqlmap.org",
     }
 
     SHELL_PREFIXES = COMMAND_HINTS | {
@@ -1719,12 +1725,53 @@ class AiKaliAssistantApp:
         script = textwrap.dedent(scanner).strip().replace("__TARGET_URL__", repr(url))
         return "python3 - <<'PY'\n" + script + "\nPY"
 
-    @staticmethod
-    def _extract_first_url(text: str) -> str:
-        match = re.search(r"https?://[^\s<>'\"`]+", text)
-        if not match:
+    @classmethod
+    def _extract_first_url(cls, text: str) -> str:
+        candidates = [
+            cls._clean_url_candidate(match.group(0))
+            for match in re.finditer(r"https?://[^\s<>'\"`]+", text)
+        ]
+        candidates = [candidate for candidate in candidates if candidate]
+        if not candidates:
             return ""
-        return match.group(0).rstrip(".,);]")
+
+        target_markers = (
+            "target url",
+            "full target url",
+            "alvo",
+            "analise",
+            "analisar",
+            "site",
+            "aplicacao",
+            "aplicação",
+        )
+        for line in text.splitlines():
+            lowered = line.lower()
+            if not any(marker in lowered for marker in target_markers):
+                continue
+            line_candidates = [
+                cls._clean_url_candidate(match.group(0))
+                for match in re.finditer(r"https?://[^\s<>'\"`]+", line)
+            ]
+            for candidate in line_candidates:
+                if candidate and not cls._is_reference_url(candidate):
+                    return candidate
+            if len(candidates) == 1 and line_candidates:
+                return line_candidates[0]
+
+        for candidate in candidates:
+            if not cls._is_reference_url(candidate):
+                return candidate
+        return candidates[0] if len(candidates) == 1 else ""
+
+    @staticmethod
+    def _clean_url_candidate(url: str) -> str:
+        return url.strip().rstrip(".,);]")
+
+    @classmethod
+    def _is_reference_url(cls, url: str) -> bool:
+        host = (urlparse(url).hostname or "").lower()
+        return host in cls.REFERENCE_URL_DOMAINS
 
     def _record_command_result(self, result: SSHCommandResult) -> None:
         stdout = result.stdout.strip()
@@ -1853,7 +1900,7 @@ class AiKaliAssistantApp:
                 "Sistema",
                 "Ação intensa não executada automaticamente:\n"
                 + "\n".join(f"- {reason}" for reason in intensive_reasons)
-                + f"\n\nAção: {command}",
+                + f"\n\nAção: {self._display_command(command)}",
                 "error",
             )
             self.status_var.set("Ação intensa bloqueada na automação.")
@@ -2151,17 +2198,34 @@ class AiKaliAssistantApp:
         return cleaned
 
     def _blocked_command_reason(self, command: str) -> str:
+        policy_text = self._command_policy_text(command)
         for pattern, reason in self.BLOCKED_PATTERNS:
-            if re.search(pattern, command, re.IGNORECASE | re.DOTALL):
+            if re.search(pattern, policy_text, re.IGNORECASE | re.DOTALL):
                 return reason
         return ""
 
     def _intensive_command_reasons(self, command: str) -> list[str]:
+        policy_text = self._command_policy_text(command)
         reasons = []
         for pattern, reason in self.INTENSIVE_PATTERNS:
-            if re.search(pattern, command, re.IGNORECASE | re.DOTALL):
+            if re.search(pattern, policy_text, re.IGNORECASE | re.DOTALL):
                 reasons.append(reason)
         return reasons
+
+    @classmethod
+    def _command_policy_text(cls, command: str) -> str:
+        command = command.strip()
+        if cls._is_structured_assessment_command(command):
+            return command.splitlines()[0]
+        return command
+
+    @staticmethod
+    def _is_structured_assessment_command(command: str) -> bool:
+        return (
+            command.startswith("python3 - <<'PY'")
+            and "TARGET_URL =" in command
+            and "structured_web_assessment" in command
+        )
 
 
 def main() -> None:
